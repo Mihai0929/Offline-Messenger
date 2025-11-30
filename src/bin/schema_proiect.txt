@@ -38,3 +38,10 @@ PROCES COMUNICARE DUPA REALIZAREA CONEXIUNII:
         -aplicam interogari bazei de date pentru a gasi mesaje in asteptare
         -in caz ca avem, le trimitem catre server, care le cripteaza si il trimite catre client
         -retinem daca am livrat sau nu mesajele in baza de date
+
+Folosesc un sistem de encriptare autentificat cu date asociate(AEAD), respectiv GCM(Galois/Counter Mode) care functioneaza astfel:
+Pentru un input care are o cheie K, un continut text P, si date asociate AD, convertim cheia K pentru a produce un cifru C.
+Computam un tag de autentificare T folosindu-ne de C si AD(tag-ul ramanand necriptat). Pentru un recipient care cunoaste cheia K
+(in cazul nostru clientul), odata ce primim AD, C, T, acesta poate decripta textul P si putem verifica eticheta T pentru a ne asigura ca textul cifrat si
+datele asociate nu au fost modificate.
+Pentru schimbul de chei ne folosim de algoritmul Diffie Hellman

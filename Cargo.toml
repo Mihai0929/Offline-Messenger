@@ -3,4 +3,29 @@ name = "project"
 version = "0.1.0"
 edition = "2024"
 
+#Definesc binary-uri pentru realizarea mai multor executabile(server si client)
+[[bin]]
+name = "server"
+path = "src/bin/server.rs"
+
+[[bin]]
+name = "client"
+path = "src/bin/client.rs"
+
 [dependencies]
+#Framework
+eframe = "0.33"
+
+#Serializare
+serde = "1"
+serde_derive = "1"
+serde_json = "1"
+
+#Baza de date
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+
+#Crate-uri pentru criptare
+sha2 = "0.10" #pentru functia h 
+aes-gcm = "0.10" #pentru formarea criptarii
+x25519-dalek = "2" #pentru algoritmul Diffie-Hellman in schimbarea cheilor
+rand = "0.9" #pentru generarea cheilor random
