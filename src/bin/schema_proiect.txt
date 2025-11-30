@@ -1,0 +1,40 @@
+Din moment ce mesajele pe care le trimit si vreau sa le stochez sunt la nivel local(offline messaging), server-ul nu poate fi doar un pipe.
+Clientul se conecteaza printr-un protocol TCP.
+
+Din moment ce clientul se conecteaza la server acestea ar trebui sa realizeze un handshake criptat:
+    -dupa ce realizez conectarea prin TCP, clientul ar trebui sa genereze o cheie privata random.
+    -clientul deriveaza din cheia privata pe cea publica pe care o trimite catre server
+    -clientul trimite un pachet de informatii(JSON)
+
+    -server-ul primeste cheia publica de la client
+    -server-ul genereaza cheia secreta, dupa o deriveaza pe cheia publica a acestuia
+    -server-ul calculeaza cheia finala(cheie privata server + cheie publica client)
+    -server-ul trimite cheia publica a acestuia catre client, de unde clientul calculeaza cheia finala(cheie privata client + cheie publica server)
+
+Pentru fiecare cuvant in parte ar trebui sa retin o frecventa pentru o criptare mai sigura.(Nonce in AES-GCM)
+
+ARHITECTURA:
+    SERVER:
+        -Primeste mesajele, le stocheaza, altfel le trimite direct
+        -Retine utilizatorii conectati si actualizeaza lista constant
+        -Stocheaza intr-o baza de date locala(SQLite) mesajele trimise pentru clientul offline
+    CLIENT:
+        -Dispune de o interfata grafica
+        -Conexiunea se realizeaza prin TCP folosind un socket
+    Fiecare cheie de sesiune este unica si generata in urma criptarii
+
+PROCES COMUNICARE DUPA REALIZAREA CONEXIUNII:
+    TRIMITEREA MESAJULUI:
+        -clientul trimite mesajul
+        -realizam criptarea mesajului, incrementam Nonce-ul, server-ul realizeaza decriptarea pachetului cu Nonce-ul anterior
+        -server-ul formeaza JSON-ul decriptat
+    REDIRECTIONARE MESAJ:
+    CAZ 1: user-ul este online
+        -server-ul ia mesajul decriptat, il cripteaza cu cheia de sesiune a clientului care receptioneaza mesajul, iar apoi server-ul trimite prin socket
+    CAZ 2: user-ul este offline
+        -server-ul stocheaza mesajul in baza de date
+    CAZ 3: user-ul intra online
+        -clientul realizeza conexiunea cu server-ul
+        -aplicam interogari bazei de date pentru a gasi mesaje in asteptare
+        -in caz ca avem, le trimitem catre server, care le cripteaza si il trimite catre client
+        -retinem daca am livrat sau nu mesajele in baza de date
