@@ -1,4 +1,7 @@
-use aes_gcm::aead::OsRng;
+use aes_gcm::{
+    Aes256Gcm, KeyInit, Nonce,
+    aead::{AeadMut, OsRng},
+};
 
 use x25519_dalek::{EphemeralSecret, PublicKey};
 
@@ -43,5 +46,49 @@ impl RememberSecret {
         hash_func.update(shared_secret.as_bytes());
 
         hash_func.finalize().into()
+    }
+}
+
+pub struct ChannelSecure {
+    nonce_cnt: u64,
+    cifru: Aes256Gcm,
+}
+
+impl ChannelSecure {
+    pub fn new(curr_key: [u8; 32]) -> Self {
+        Self {
+            nonce_cnt: 0,
+            cifru: Aes256Gcm::new(&curr_key.into()),
+        }
+    }
+
+    pub fn encrypt(&mut self, info: &[u8]) -> Result<Vec<u8>, aes_gcm::Error> {
+        //Cream counter-ul
+        let mut nonce_bytes = [0u8; 12];
+
+        nonce_bytes[..8].copy_from_slice(&self.nonce_cnt.to_be_bytes());
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        //Criptam continutul
+        let res = self.cifru.encrypt(nonce, info)?;
+
+        //Formam pachetul pe care vrem sa-l trimitem(Nonce-ul si cifrul)
+        let mut package = Vec::new();
+        package.extend_from_slice(&self.nonce_cnt.to_be_bytes());
+        package.extend(res);
+
+        self.nonce_cnt += 1;
+        Ok(package)
+    }
+
+    pub fn decrypt(&mut self, crypted_content: &[u8]) -> Result<Vec<u8>, aes_gcm::Error> {
+        //Impartim continutul, mai apoi
+        let (nonce_bytes, cipher_text) = crypted_content.split_at(8);
+
+        let mut initial_nonce = [0u8; 12];
+        initial_nonce[..8].copy_from_slice(nonce_bytes);
+        let nonce = Nonce::from_slice(&initial_nonce);
+
+        self.cifru.decrypt(nonce, cipher_text)
     }
 }
