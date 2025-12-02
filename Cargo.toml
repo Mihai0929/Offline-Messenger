@@ -25,7 +25,7 @@ serde_json = "1"
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 
 #Crate-uri pentru criptare
-sha2 = "0.10" #pentru functia h 
+sha2 = "0.10" #pentru functia hash
 aes-gcm = "0.10" #pentru formarea criptarii
 x25519-dalek = "2" #pentru algoritmul Diffie-Hellman in schimbarea cheilor
 rand = "0.9" #pentru generarea cheilor random
