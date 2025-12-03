@@ -5,7 +5,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-fn client_handle(stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpStream>>>){
+fn client_handle(stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpStream>>>) {
     println!("Client nou conectat!");
 }
 
@@ -37,24 +37,24 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     //Setam portul 2024 pentru server
     let stream = TcpListener::bind("127.0.0.1:2024")?;
-    println!("Asteptam clienti la conectarea serverului...");
+    println!("[server]Asteptam clienti la conectarea serverului...");
 
     //Acceptam conexiunile si le procesam in ordine
-    for stream_info in stream.incoming(){
-        match stream_info{
-        Ok(stream) => {
-        //Las o copie la mp pentru a procesa utilizatorii fara pierderi de informatii
-        let mp_copy = connected_clients.clone();
+    for stream_info in stream.incoming() {
+        match stream_info {
+            Ok(stream) => {
+                //Las o copie la mp pentru a procesa utilizatorii fara pierderi de informatii
+                let mp_copy = connected_clients.clone();
 
-        //Pregatim thread-uri pentru toti clientii   
-        thread::spawn(move || {
-            client_handle(stream, mp_copy);
-        });
-        }
+                //Pregatim thread-uri pentru toti clientii
+                thread::spawn(move || {
+                    client_handle(stream, mp_copy);
+                });
+            }
 
-        Err(e) => {
-            println!("Eroare la conectarea cu server-ul: {e}");
-        }
+            Err(e) => {
+                println!("[server]Eroare la conectarea cu server-ul: {e}");
+            }
         }
     }
     Ok(())
