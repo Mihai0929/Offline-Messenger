@@ -1,12 +1,61 @@
+use project::criptare::{ChannelSecure, RememberSecret};
+use project::protocol::Message;
 use rusqlite::{Connection, Result};
 use std::collections::HashMap;
 use std::error::Error;
+use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-fn client_handle(stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpStream>>>) {
+fn send_data(stream: &mut TcpStream, data: &[u8]) -> io::Result<()> {
+    let len = data.len() as u32;
+
+    stream.write_all(&len.to_be_bytes())?;
+    stream.write_all(data)?;
+
+    Ok(())
+}
+
+fn receive_data(stream: &mut TcpStream) -> io::Result<Vec<u8>>{
+    let mut len_buff = [0u8; 4];
+    stream.read_exact(&mut len_buff)?;
+
+    let content_len = u32::from_be_bytes(len_buff) as usize;
+
+    let mut buff = vec![0u8; content_len];
+    stream.read_exact(&mut buff)?;
+
+    Ok(buff)
+}
+
+fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpStream>>>) {
     println!("Client nou conectat!");
+
+    //Pentru fiecare client in parte realizez conexiunea la baze de date
+    let conn = Connection::open("info.db").expect("Eroare la deschiderea bazei de date");
+
+    //Realizam etapa de criptare
+    let info = RememberSecret::new();
+    let client_public_key = info.public_key.as_bytes().to_vec();
+
+    //Citim cheia publica de la client
+    let data = match receive_data(&mut stream){
+        Ok(content) => content,
+        Err(e) => {eprintln!("Eroare la preluarea informatiilor: {e}"); return;} 
+    };
+
+    let client_msg: Message = serde_json::from_slice(&data).expect("JSON Invalid!");
+
+    let client_public_key = match client_msg{
+        Message::ClientKey { public_key } => public_key,
+        _ => {println!("Protocol esuat!"); return;} 
+    };
+
+    //Realizam conexiunea
+    let common_key = info.derive_key(client_public_key);
+    let mut communication_channel = ChannelSecure::new(common_key);
+
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
