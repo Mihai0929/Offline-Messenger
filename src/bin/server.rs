@@ -95,12 +95,7 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpSt
                 
                 let password_hash = format!("{:x}", res);
                 
-                let cnt: i64 = match conn.query_row("SELECT count(*) FROM users WHERE username = ?1", params![username], |row| row.get(0)){
-                    Ok(count) => count,
-                    Err(_) => {
-                        0
-                    }
-                };
+                let cnt: i64 = conn.query_row("SELECT count(*) FROM users WHERE username = ?1", params![username], |row| row.get(0)).unwrap_or_default();
 
                 //Inregistram utilizatorul
                 let ok = if cnt == 0{
@@ -108,10 +103,7 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpSt
                 }
                 else{
                     //In caz ca nu am parola compar cu un string empty sa fie eroare
-                    let pass: String = match conn.query_row("SELECT password FROM users WHERE username = ?1", params![username], |row| row.get(0)){
-                        Ok(pass) => pass,
-                        Err(_) => String::new(),
-                    };
+                    let pass: String = conn.query_row("SELECT password FROM users WHERE username = ?1", params![username], |row| row.get(0)).unwrap_or_default();
                     pass == password_hash
                 };
 
@@ -120,10 +112,8 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpSt
 
                     curr_user = Some(username.clone());
 
-                    if let Ok(mut map) = clients.lock(){
-                        if let Ok(mut stream_copy) = stream.try_clone(){
-                            map.insert(username.clone(), stream_copy);
-                        }
+                    if let Ok(mut map) = clients.lock() && let Ok(stream_copy) = stream.try_clone(){
+                        map.insert(username.clone(), stream_copy);
                     }
 
                     //Trimitem mesajele offline la user-ul logged
@@ -165,14 +155,32 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpSt
                         };
 
                         if let Ok(encrypted_data) = communication_channel.encrypt(&bytes_package){
-                            send_data(&mut stream, &encrypted_data);
+                            send_data(&mut stream, &encrypted_data).ok();
                         }
                     }
+
+                    //Marcam mesajele ca delivered
+                    conn.execute("UPDATE messages SET delivered = 1 WHERE delivered = 0 and receiver = ?1", params![username]).ok();
                 }
-            },
-            
+            }
+            Message::Text { to, content, reply_id } => {
+                if let Some(ref sender) = curr_user{
+                    let time = match SystemTime::now().duration_since(UNIX_EPOCH){
+                        Ok(info) => info.as_secs(),
+                        Err(_) => panic!("SystemTime before UNIX EPOCH!"),
+                    };
+
+                    match conn.execute("INSERT INTO messages (sender, receiver, content, time, delivered) VALUES (?1, ?2, ?3, ?4, 0)", params![sender, to, content, time]){
+                        Ok(_) => println!("Mesaj salvat cu succes({} -> {})", sender, to),
+                        Err(e) => eprintln!("Eroare la trimiterea mesajului: {}", e),
+                    }
+                }
+                else{
+                    println!("Trimiterea mesajelor necesita autentificare!");
+                }
+            }
             _ => {
-                println!("todo!");
+                println!("todo");
             }
         }
     }
