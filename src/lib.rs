@@ -1,8 +1,8 @@
 pub mod criptare;
 pub mod protocol;
 
-use std::net::TcpStream;
 use std::io::{self, Read, Write};
+use std::net::TcpStream;
 
 pub fn send_data(stream: &mut TcpStream, data: &[u8]) -> io::Result<()> {
     let len = data.len() as u32;
@@ -13,7 +13,7 @@ pub fn send_data(stream: &mut TcpStream, data: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
-pub fn receive_data(stream: &mut TcpStream) -> io::Result<Vec<u8>>{
+pub fn receive_data(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
     let mut len_buff = [0u8; 4];
     stream.read_exact(&mut len_buff)?;
 

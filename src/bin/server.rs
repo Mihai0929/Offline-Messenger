@@ -1,13 +1,12 @@
 use project::criptare::{ChannelSecure, RememberSecret};
 use project::protocol::Message;
-use project::{send_data, receive_data};
+use project::{receive_data, send_data};
 use rusqlite::{Connection, Result};
 use std::collections::HashMap;
 use std::error::Error;
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
-
 
 fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpStream>>>) {
     println!("Client nou conectat!");
@@ -20,24 +19,32 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpSt
     let server_public_key = info.public_key.as_bytes().to_vec();
 
     //Citim cheia publica de la client
-    let data = match receive_data(&mut stream){
+    let data = match receive_data(&mut stream) {
         Ok(content) => content,
-        Err(e) => {eprintln!("Eroare la preluarea informatiilor: {e}"); return;} 
+        Err(e) => {
+            eprintln!("Eroare la preluarea informatiilor: {e}");
+            return;
+        }
     };
 
-    let response = Message::ServerKey { public_key: server_public_key };
+    let response = Message::ServerKey {
+        public_key: server_public_key,
+    };
     let response_bytes = serde_json::to_vec(&response).expect("Eroare serializare!");
 
-    if let Err(e) = send_data(&mut stream, &response_bytes){
+    if let Err(e) = send_data(&mut stream, &response_bytes) {
         eprintln!("Eroare la trimiterea continutului: {e}");
-        return ;
+        return;
     }
 
     let client_msg: Message = serde_json::from_slice(&data).expect("JSON Invalid de la client!");
 
-    let client_public_key = match client_msg{
+    let client_public_key = match client_msg {
         Message::ClientKey { public_key } => public_key,
-        _ => {println!("Protocol esuat!"); return;} 
+        _ => {
+            println!("Protocol esuat!");
+            return;
+        }
     };
 
     println!("Cheie client primita! Generam cheia comuna");
@@ -48,22 +55,31 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpSt
 
     println!("Conexiune realizata cu succes!");
 
-    loop{
+    loop {
         //Citim pachetul criptat
-        let encrypted_package = match receive_data(&mut stream){
+        let encrypted_package = match receive_data(&mut stream) {
             Ok(bytes) => bytes,
-            Err(e) => {eprintln!("Eroare receive_data: {e}"); return;}
-        };
-        
-        //Decriptam continutul
-        let decrypted_package = match communication_channel.decrypt(&encrypted_package){
-            Ok(bytes) => bytes,
-            Err(e) => {eprintln!("Eroare decrypt: {e}"); return;}
+            Err(e) => {
+                eprintln!("Eroare receive_data: {e}");
+                return;
+            }
         };
 
-        let msg: Message = match serde_json::from_slice(&decrypted_package){
+        //Decriptam continutul
+        let decrypted_package = match communication_channel.decrypt(&encrypted_package) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                eprintln!("Eroare decrypt: {e}");
+                return;
+            }
+        };
+
+        let msg: Message = match serde_json::from_slice(&decrypted_package) {
             Ok(msg) => msg,
-            Err(e) => {eprintln!("JSON invalid: {e}"); return;}
+            Err(e) => {
+                eprintln!("JSON invalid: {e}");
+                return;
+            }
         };
 
         println!("Am primit mesajul: {:?}", msg);
