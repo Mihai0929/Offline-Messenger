@@ -1,5 +1,5 @@
 use project::criptare::{ChannelSecure, RememberSecret};
-use project::protocol::Message;
+use project::protocol::{Message, MessageHistoryInfo};
 use project::{receive_data, send_data};
 use rusqlite::{Connection, Result};
 use std::collections::HashMap;
@@ -7,6 +7,9 @@ use std::error::Error;
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use sha2::{Sha256, Digest};
+use std::time::{SystemTime, UNIX_EPOCH};
+use rusqlite::params;
 
 fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpStream>>>) {
     println!("Client nou conectat!");
@@ -55,6 +58,8 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpSt
 
     println!("Conexiune realizata cu succes!");
 
+    let mut curr_user: Option<String> = None;
+
     loop {
         //Citim pachetul criptat
         let encrypted_package = match receive_data(&mut stream) {
@@ -82,7 +87,94 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpSt
             }
         };
 
-        println!("Am primit mesajul: {:?}", msg);
+        match msg{
+            Message::Login { username, password } => {
+                let mut hash_func = Sha256::new();
+                hash_func.update(password.as_bytes());
+                let res = hash_func.finalize();
+                
+                let password_hash = format!("{:x}", res);
+                
+                let cnt: i64 = match conn.query_row("SELECT count(*) FROM users WHERE username = ?1", params![username], |row| row.get(0)){
+                    Ok(count) => count,
+                    Err(_) => {
+                        0
+                    }
+                };
+
+                //Inregistram utilizatorul
+                let ok = if cnt == 0{
+                    conn.execute("INSERT INTO users (username, password) VALUES (?1, ?2)", params![username, password_hash]).is_ok()
+                }
+                else{
+                    //In caz ca nu am parola compar cu un string empty sa fie eroare
+                    let pass: String = match conn.query_row("SELECT password FROM users WHERE username = ?1", params![username], |row| row.get(0)){
+                        Ok(pass) => pass,
+                        Err(_) => String::new(),
+                    };
+                    pass == password_hash
+                };
+
+                if ok{
+                    println!("Login realizat cu succes!");
+
+                    curr_user = Some(username.clone());
+
+                    if let Ok(mut map) = clients.lock(){
+                        if let Ok(mut stream_copy) = stream.try_clone(){
+                            map.insert(username.clone(), stream_copy);
+                        }
+                    }
+
+                    //Trimitem mesajele offline la user-ul logged
+                    let mut statement = match conn.prepare("SELECT sender, content, time FROM messages WHERE delivered = 0 AND receiver = ?1"){
+                        Ok(s) => s,
+                        Err(e) => {
+                            eprintln!("Eroare la preluarea informatiilor: {}", e);
+                            return ;
+                        }
+                    };
+
+                    let mut rows_iterator = match statement.query(params![username]){
+                        Ok(rows) => rows,
+                        Err(e) => {eprintln!("Eroare query: {}", e); return;}
+                    };
+
+                    //Iteram prin map
+                    while let Ok(Some(row)) = rows_iterator.next(){
+                        
+                        let sender:String = match row.get(0){
+                            Ok(s) => s,
+                            Err(_) => {continue;}
+                        };
+
+                        let content:String = match row.get(1){
+                            Ok(c) => c,
+                            Err(_) => {continue;}
+                        };
+
+                        let time:u64 = match row.get(2){
+                            Ok(t) => t,
+                            Err(_) => {continue;}
+                        };
+
+                        let package = Message::ToSend { from: sender, content, time };
+                        let bytes_package = match serde_json::to_vec(&package){
+                            Ok(content) => content,
+                            Err(e) => {eprintln!("Eroare serializare mesaje de trimis: {}", e); break;}
+                        };
+
+                        if let Ok(encrypted_data) = communication_channel.encrypt(&bytes_package){
+                            send_data(&mut stream, &encrypted_data);
+                        }
+                    }
+                }
+            },
+            
+            _ => {
+                println!("todo!");
+            }
+        }
     }
 }
 
