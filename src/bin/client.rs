@@ -76,11 +76,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             match msg {
                 Message::ToSend {
+                    id,
                     from,
                     content,
                     time,
                 } => {
-                    println!("[{}] {}: {}", time, from, content);
+                    println!("ID: {} | [{}] {}: {}", id, time, from, content);
                 }
                 Message::HistoryData { content } => {
                     println!("\r Istoric");

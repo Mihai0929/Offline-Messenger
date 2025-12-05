@@ -39,6 +39,7 @@ pub enum Message {
 
     //Mesajele sunt trimise de catre server(retin timpul mesajelor trimise in caz ca sunt offline pentru a fi distribuite in ordinea corecta)
     ToSend {
+        id: u64,
         from: String,
         content: String,
         time: u64,

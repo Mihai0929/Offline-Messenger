@@ -1,15 +1,15 @@
 use project::criptare::{ChannelSecure, RememberSecret};
-use project::protocol::{Message, MessageHistoryInfo};
+use project::protocol::Message;
 use project::{receive_data, send_data};
+use rusqlite::params;
 use rusqlite::{Connection, Result};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::error::Error;
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use sha2::{Sha256, Digest};
 use std::time::{SystemTime, UNIX_EPOCH};
-use rusqlite::params;
 
 fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpStream>>>) {
     println!("Client nou conectat!");
@@ -87,37 +87,54 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpSt
             }
         };
 
-        match msg{
+        match msg {
             Message::Login { username, password } => {
                 let mut hash_func = Sha256::new();
                 hash_func.update(password.as_bytes());
                 let res = hash_func.finalize();
-                
+
                 let password_hash = format!("{:x}", res);
-                
-                let cnt: i64 = conn.query_row("SELECT count(*) FROM users WHERE username = ?1", params![username], |row| row.get(0)).unwrap_or_default();
+
+                let cnt: i64 = conn
+                    .query_row(
+                        "SELECT count(*) FROM users WHERE username = ?1",
+                        params![username],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or_default();
 
                 //Inregistram utilizatorul
-                let ok = if cnt == 0{
-                    conn.execute("INSERT INTO users (username, password) VALUES (?1, ?2)", params![username, password_hash]).is_ok()
-                }
-                else{
+                let ok = if cnt == 0 {
+                    conn.execute(
+                        "INSERT INTO users (username, password) VALUES (?1, ?2)",
+                        params![username, password_hash],
+                    )
+                    .is_ok()
+                } else {
                     //In caz ca nu am parola compar cu un string empty sa fie eroare
-                    let pass: String = conn.query_row("SELECT password FROM users WHERE username = ?1", params![username], |row| row.get(0)).unwrap_or_default();
+                    let pass: String = conn
+                        .query_row(
+                            "SELECT password FROM users WHERE username = ?1",
+                            params![username],
+                            |row| row.get(0),
+                        )
+                        .unwrap_or_default();
                     pass == password_hash
                 };
 
-                if ok{
+                if ok {
                     println!("Login realizat cu succes!");
 
                     curr_user = Some(username.clone());
 
-                    if let Ok(mut map) = clients.lock() && let Ok(stream_copy) = stream.try_clone(){
+                    if let Ok(mut map) = clients.lock()
+                        && let Ok(stream_copy) = stream.try_clone()
+                    {
                         map.insert(username.clone(), stream_copy);
                     }
 
                     //Trimitem mesajele offline la user-ul logged
-                    let mut statement = match conn.prepare("SELECT sender, content, time FROM messages WHERE delivered = 0 AND receiver = ?1"){
+                    let mut statement = match conn.prepare("SELECT sender, content, time, id FROM messages WHERE delivered = 0 AND receiver = ?1"){
                         Ok(s) => s,
                         Err(e) => {
                             eprintln!("Eroare la preluarea informatiilor: {}", e);
@@ -125,62 +142,162 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpSt
                         }
                     };
 
-                    let mut rows_iterator = match statement.query(params![username]){
+                    let mut rows_iterator = match statement.query(params![username]) {
                         Ok(rows) => rows,
-                        Err(e) => {eprintln!("Eroare query: {}", e); return;}
+                        Err(e) => {
+                            eprintln!("Eroare query: {}", e);
+                            return;
+                        }
                     };
 
                     //Iteram prin map
-                    while let Ok(Some(row)) = rows_iterator.next(){
-                        
-                        let sender:String = match row.get(0){
+                    while let Ok(Some(row)) = rows_iterator.next() {
+                        let sender: String = match row.get(0) {
                             Ok(s) => s,
-                            Err(_) => {continue;}
+                            Err(_) => {
+                                continue;
+                            }
                         };
 
-                        let content:String = match row.get(1){
+                        let content: String = match row.get(1) {
                             Ok(c) => c,
-                            Err(_) => {continue;}
+                            Err(_) => {
+                                continue;
+                            }
                         };
 
-                        let time:u64 = match row.get(2){
+                        let time: u64 = match row.get(2) {
                             Ok(t) => t,
-                            Err(_) => {continue;}
+                            Err(_) => {
+                                continue;
+                            }
+                        };
+                        let curr_id: u64 = match row.get(3) {
+                            Ok(i) => i,
+                            Err(_) => {
+                                continue;
+                            }
                         };
 
-                        let package = Message::ToSend { from: sender, content, time };
-                        let bytes_package = match serde_json::to_vec(&package){
+                        let package = Message::ToSend {
+                            id: curr_id,
+                            from: sender,
+                            content,
+                            time,
+                        };
+                        let bytes_package = match serde_json::to_vec(&package) {
                             Ok(content) => content,
-                            Err(e) => {eprintln!("Eroare serializare mesaje de trimis: {}", e); break;}
+                            Err(e) => {
+                                eprintln!("Eroare serializare mesaje de trimis: {}", e);
+                                break;
+                            }
                         };
 
-                        if let Ok(encrypted_data) = communication_channel.encrypt(&bytes_package){
+                        if let Ok(encrypted_data) = communication_channel.encrypt(&bytes_package) {
                             send_data(&mut stream, &encrypted_data).ok();
                         }
                     }
 
                     //Marcam mesajele ca delivered
-                    conn.execute("UPDATE messages SET delivered = 1 WHERE delivered = 0 and receiver = ?1", params![username]).ok();
+                    conn.execute(
+                        "UPDATE messages SET delivered = 1 WHERE delivered = 0 and receiver = ?1",
+                        params![username],
+                    )
+                    .ok();
                 }
             }
-            Message::Text { to, content, reply_id } => {
-                if let Some(ref sender) = curr_user{
-                    let time = match SystemTime::now().duration_since(UNIX_EPOCH){
+            Message::Text {
+                to,
+                content,
+                reply_id,
+            } => {
+                if let Some(ref sender) = curr_user {
+                    let time = match SystemTime::now().duration_since(UNIX_EPOCH) {
                         Ok(info) => info.as_secs(),
                         Err(_) => panic!("SystemTime before UNIX EPOCH!"),
                     };
 
-                    match conn.execute("INSERT INTO messages (sender, receiver, content, time, delivered) VALUES (?1, ?2, ?3, ?4, 0)", params![sender, to, content, time]){
+                    match conn.execute("INSERT INTO messages (sender, receiver, id, content, time, delivered) VALUES (?1, ?2, ?3, ?4, ?5, 0)", params![sender, to, reply_id, content, time]){
                         Ok(_) => println!("Mesaj salvat cu succes({} -> {})", sender, to),
                         Err(e) => eprintln!("Eroare la trimiterea mesajului: {}", e),
                     }
-                }
-                else{
+                } else {
                     println!("Trimiterea mesajelor necesita autentificare!");
                 }
             }
+            Message::HistoryInfo { user } => {
+                if let Some(ref conn_user) = curr_user {
+                    //Realizez interogare pentru aflarea mesajelor transmise intre 2 utilizatori
+                    let mut statement = match conn.prepare("SELECT id, sender, content, time, delivered FROM messages
+                                                                    WHERE (sender = ?1 AND receiver = ?2) OR (sender = ?2 AND receiver = ?1) ORDER BY time ASC")
+                    {
+                        Ok(s) => s,
+                        Err(e) => {eprintln!("Eroare baza de date preluare informatii istoric: {}", e); continue;}
+                    };
+
+                    let mut rows_iterator = match statement.query(params![conn_user, user]) {
+                        Ok(rows) => rows,
+                        Err(e) => {
+                            eprintln!("Eroare query: {e}");
+                            return;
+                        }
+                    };
+
+                    //Iteram prin map
+                    while let Ok(Some(row)) = rows_iterator.next() {
+                        let message_id: u64 = match row.get(0) {
+                            Ok(id) => id,
+                            Err(_) => {
+                                continue;
+                            }
+                        };
+
+                        let sender: String = match row.get(1) {
+                            Ok(s) => s,
+                            Err(_) => {
+                                continue;
+                            }
+                        };
+
+                        let content: String = match row.get(2) {
+                            Ok(c) => c,
+                            Err(_) => {
+                                continue;
+                            }
+                        };
+
+                        let time: u64 = match row.get(2) {
+                            Ok(t) => t,
+                            Err(_) => {
+                                continue;
+                            }
+                        };
+
+                        let package = Message::ToSend {
+                            id: message_id,
+                            from: sender,
+                            content,
+                            time,
+                        };
+                        let bytes_package = match serde_json::to_vec(&package) {
+                            Ok(content) => content,
+                            Err(e) => {
+                                eprintln!("Eroare serializare mesaje de trimis: {}", e);
+                                break;
+                            }
+                        };
+
+                        if let Ok(encrypted_data) = communication_channel.encrypt(&bytes_package) {
+                            send_data(&mut stream, &encrypted_data).ok();
+                        }
+                    }
+                    println!("Istoric trimis catre {}", conn_user);
+                } else {
+                    println!("Aceasta comanda necesita autentificare!");
+                }
+            }
             _ => {
-                println!("todo");
+                println!("Comanda invalida");
             }
         }
     }
