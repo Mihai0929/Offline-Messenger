@@ -1,5 +1,5 @@
 use project::criptare::{ChannelSecure, RememberSecret};
-use project::protocol::Message;
+use project::protocol::{Message, MessageHistoryInfo};
 use project::{receive_data, send_data};
 use rusqlite::params;
 use rusqlite::{Connection, Result};
@@ -7,11 +7,11 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::error::Error;
 use std::net::{TcpListener, TcpStream};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpStream>>>) {
+fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, mpsc::Sender<Message>>>>) {
     println!("Client nou conectat!");
 
     //Pentru fiecare client in parte realizez conexiunea la baze de date
@@ -54,9 +54,25 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpSt
 
     //Realizam conexiunea
     let common_key = info.derive_key(client_public_key);
-    let mut communication_channel = ChannelSecure::new(common_key);
 
+    //Am nevoie de 2 canale de comunicare, unul de citire unde decriptez continutul primit
+    //unul de scriere, criptez continutul si tirmit
+    let mut read_channel = ChannelSecure::new(common_key);
+    let mut write_channel = ChannelSecure::new(common_key);
     println!("Conexiune realizata cu succes!");
+
+    let (tx, rx) = mpsc::channel::<Message>();
+
+    let mut writer_thread = stream.try_clone().expect("Eroare stream clone");
+
+    //Pregatim thread-ul pentru ascultare
+    thread::spawn(move || {
+        while let Ok(msg) = rx.recv(){
+            if let Ok(bytes) = serde_json::to_vec(&msg) && let Ok(crypted) = write_channel.encrypt(&bytes) && send_data(&mut writer_thread, &crypted).is_err(){
+                break;
+            }
+        }
+    });
 
     let mut curr_user: Option<String> = None;
 
@@ -64,14 +80,16 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpSt
         //Citim pachetul criptat
         let encrypted_package = match receive_data(&mut stream) {
             Ok(bytes) => bytes,
-            Err(e) => {
-                eprintln!("Eroare receive_data: {e}");
-                return;
+            Err(_) => {
+                if let Some(user) = curr_user && let Ok(mut mp) = clients.lock(){
+                        mp.remove(&user);
+                }
+                break;
             }
         };
 
         //Decriptam continutul
-        let decrypted_package = match communication_channel.decrypt(&encrypted_package) {
+        let decrypted_package = match read_channel.decrypt(&encrypted_package) {
             Ok(bytes) => bytes,
             Err(e) => {
                 eprintln!("Eroare decrypt: {e}");
@@ -127,10 +145,9 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpSt
 
                     curr_user = Some(username.clone());
 
-                    if let Ok(mut map) = clients.lock()
-                        && let Ok(stream_copy) = stream.try_clone()
-                    {
-                        map.insert(username.clone(), stream_copy);
+                    //retinem sender-ul in map
+                    if let Ok(mut map) = clients.lock(){
+                        map.insert(username.clone(), tx.clone());
                     }
 
                     //Trimitem mesajele offline la user-ul logged
@@ -179,23 +196,9 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpSt
                             }
                         };
 
-                        let package = Message::ToSend {
-                            id: curr_id,
-                            from: sender,
-                            content,
-                            time,
-                        };
-                        let bytes_package = match serde_json::to_vec(&package) {
-                            Ok(content) => content,
-                            Err(e) => {
-                                eprintln!("Eroare serializare mesaje de trimis: {}", e);
-                                break;
-                            }
-                        };
+                        let msg = Message::ToSend { id: curr_id, from: sender, content, time };
 
-                        if let Ok(encrypted_data) = communication_channel.encrypt(&bytes_package) {
-                            send_data(&mut stream, &encrypted_data).ok();
-                        }
+                        tx.send(msg).ok();
                     }
 
                     //Marcam mesajele ca delivered
@@ -204,6 +207,9 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpSt
                         params![username],
                     )
                     .ok();
+                }
+                else{
+                    println!("Login esuat! parola incorecta");
                 }
             }
             Message::Text {
@@ -221,13 +227,33 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpSt
                         Ok(_) => println!("Mesaj salvat cu succes({} -> {})", sender, to),
                         Err(e) => eprintln!("Eroare la trimiterea mesajului: {}", e),
                     }
+
+                    let mut delivered = false;
+                    if let Ok(map) = clients.lock(){
+                        //Verificam daca user-ul este pe canal si ii trimitem mesajul
+                        if let Some(recipient_tx) = map.get(&to){
+                            let msg = Message::ToSend { id: 0, from: sender.clone(), content: content.clone(), time };
+                            if recipient_tx.send(msg).is_ok(){
+                                delivered = true;
+                            }
+                        }
+                    }
+
+                    //daca mesajul s-a trimis dam update la baza de date
+                    if delivered{
+                        conn.execute("UPDATE messages SET delivered = 1 WHERE sender = ?1 and receiver = ?2 and time = ?3", params![sender, to, time]).ok();
+                        println!("Mesaj livrat cu succes catre {}", to);
+                    }
+                    else{
+                        println!("Mesaj offline salvat pentru {}", to);
+                    }
                 } else {
                     println!("Trimiterea mesajelor necesita autentificare!");
                 }
             }
             Message::HistoryInfo { user } => {
                 if let Some(ref conn_user) = curr_user {
-                    //Realizez interogare pentru aflarea mesajelor transmise intre 2 utilizatori
+                    //Realizez interogare pentru aflarea mesajelor transmise intre                         2 utilizatori
                     let mut statement = match conn.prepare("SELECT id, sender, content, time, delivered FROM messages
                                                                     WHERE (sender = ?1 AND receiver = ?2) OR (sender = ?2 AND receiver = ?1) ORDER BY time ASC")
                     {
@@ -242,6 +268,8 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpSt
                             return;
                         }
                     };
+
+                    let mut history_vector = Vec::new();
 
                     //Iteram prin map
                     while let Ok(Some(row)) = rows_iterator.next() {
@@ -266,31 +294,34 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, TcpSt
                             }
                         };
 
-                        let time: u64 = match row.get(2) {
+                        let time: i64 = match row.get(3) {
                             Ok(t) => t,
                             Err(_) => {
                                 continue;
                             }
                         };
 
-                        let package = Message::ToSend {
-                            id: message_id,
-                            from: sender,
-                            content,
-                            time,
-                        };
-                        let bytes_package = match serde_json::to_vec(&package) {
-                            Ok(content) => content,
-                            Err(e) => {
-                                eprintln!("Eroare serializare mesaje de trimis: {}", e);
-                                break;
+                        let delivered_success: i64 = match row.get(4){
+                            Ok(d) => d,
+                            Err(_) => {
+                                continue;
                             }
                         };
 
-                        if let Ok(encrypted_data) = communication_channel.encrypt(&bytes_package) {
-                            send_data(&mut stream, &encrypted_data).ok();
-                        }
+                        let package = MessageHistoryInfo {
+                            message_id,
+                            sender,
+                            content,
+                            time,
+                            delivered: delivered_success == 1,
+                        };
+
+                        history_vector.push(package);
                     }
+
+                    let package = Message::HistoryData { content: history_vector };
+                    tx.send(package).ok();
+
                     println!("Istoric trimis catre {}", conn_user);
                 } else {
                     println!("Aceasta comanda necesita autentificare!");
@@ -327,7 +358,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
 
     //Retin intr-un map pentru fiecare utilizator inregistrat user-ul si socket-ul
-    let connected_clients = Arc::new(Mutex::new(HashMap::<String, TcpStream>::new()));
+    let connected_clients = Arc::new(Mutex::new(HashMap::<String, mpsc::Sender<Message>>::new()));
 
     //Setam portul 2024 pentru server
     let stream = TcpListener::bind("127.0.0.1:2024")?;

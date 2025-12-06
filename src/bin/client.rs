@@ -1,106 +1,37 @@
-use project::criptare::{ChannelSecure, RememberSecret};
 use project::protocol::Message;
-use project::{receive_data, send_data};
+use project::ClientChat;
 use std::error::Error;
 use std::io::Write;
-use std::net::TcpStream;
 use std::thread;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let mut stream = TcpStream::connect("127.0.0.1:2024")?;
-
-    let info = RememberSecret::new();
-    let client_public_key = info.public_key.as_bytes().to_vec();
-
-    let to_send = Message::ClientKey {
-        public_key: client_public_key,
-    };
-    let package = serde_json::to_vec(&to_send).expect("Eroare serializare");
-
-    send_data(&mut stream, &package)?;
-
-    //Asteptam ca server-ul sa trimita cheia
-    let server_data = receive_data(&mut stream)?;
-
-    let server_msg: Message =
-        serde_json::from_slice(&server_data).expect("JSON Invalid de la server!");
-    let server_public_key = match server_msg {
-        Message::ServerKey { public_key } => public_key,
-        _ => {
-            println!("Protocol esuat!");
-            return Ok(());
-        }
-    };
-
-    println!("Cheie client primita! Generam cheia comuna");
-
-    let common_key = info.derive_key(server_public_key);
-    let communication_channel = ChannelSecure::new(common_key);
-
+    let client = ClientChat::connect("127.0.0.1:2024")?;
     println!("Conexiune realizata cu succes!");
 
-    let mut read_stream = stream.try_clone()?;
-
-    let mut read_channel = ChannelSecure::new(common_key);
-    let mut write_channel = communication_channel;
+    let (mut sender, receiver) = client.split();
 
     //Pregatesc thread-ul pentru ascultarea mesajelor
     thread::spawn(move || {
-        loop {
-            //Primesc informatiile criptate
-            let encrypted = match receive_data(&mut read_stream) {
-                Ok(data) => data,
-                Err(_) => {
-                    eprintln!("Server-ul a fost inchis");
-                    break;
-                }
-            };
-
-            //Decriptam continutul
-            let decrypted = match read_channel.decrypt(&encrypted) {
-                Ok(data) => data,
-                Err(e) => {
-                    eprintln!("Eroare: mesaj corupt sau cheie gresita: {e}");
-                    continue;
-                }
-            };
-
-            //Parsam datele si printam
-            let msg: Message = match serde_json::from_slice(&decrypted) {
-                Ok(msg) => msg,
-                Err(e) => {
-                    eprintln!("Eroare: JSON invalid: {e}");
-                    continue;
-                }
-            };
-
-            match msg {
-                Message::ToSend {
-                    id,
-                    from,
-                    content,
-                    time,
-                } => {
-                    println!("ID: {} | [{}] {}: {}", id, time, from, content);
-                }
+        while let Ok(msg) = receiver.recv(){
+            match msg{
+                Message::ToSend { id, from, content, time } => {
+                    println!("[#{}] [{}] {}: {}", id, time, from, content);
+                },
                 Message::HistoryData { content } => {
-                    println!("\r Istoric");
-                    for message in content {
-                        println!("[{}] {}: {}", message.time, message.sender, message.content);
+                    println!("Istoric");
+                    for item in content {
+                        println!("[{}] {}: {}", item.time, item.sender, item.content);
                     }
-                }
-                _ => {
-                    println!("\r[server]: {:?}", msg);
-                }
+                },
+                _ => { println!("[server]: {:?}", msg)},
             }
-
-            //Curat stream-ul
-            use std::io::Write;
             std::io::stdout().flush().ok();
         }
+        //server-ul se deconecteaza
+        std::process::exit(0);
     });
 
-    println!("Commands: login <user> <password>, history <user>, <name>: <message>");
+    println!("Commands: /login <user> <password>, /history <user>, <name>: <message>");
 
     loop {
         std::io::stdout().flush()?;
@@ -148,17 +79,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             continue;
         };
 
-        let json_content = serde_json::to_vec(&msg_to_send).expect("Eroare serializare");
-
-        let encrypted_content = match write_channel.encrypt(&json_content) {
-            Ok(content) => content,
-            Err(e) => {
-                eprintln!("Eroare criptare: {}", e);
-                continue;
-            }
-        };
-
-        send_data(&mut stream, &encrypted_content)?;
+        if let Err(e) = sender.send_message(msg_to_send){
+            eprintln!("Eroare trimitere mesaj: {}", e);
+            break;
+        }
     }
 
     Ok(())
