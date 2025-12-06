@@ -1,5 +1,5 @@
-use project::protocol::Message;
 use project::ClientChat;
+use project::protocol::Message;
 use std::error::Error;
 use std::io::Write;
 use std::thread;
@@ -12,18 +12,25 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     //Pregatesc thread-ul pentru ascultarea mesajelor
     thread::spawn(move || {
-        while let Ok(msg) = receiver.recv(){
-            match msg{
-                Message::ToSend { id, from, content, time } => {
+        while let Ok(msg) = receiver.recv() {
+            match msg {
+                Message::ToSend {
+                    id,
+                    from,
+                    content,
+                    time,
+                } => {
                     println!("[#{}] [{}] {}: {}", id, time, from, content);
-                },
+                }
                 Message::HistoryData { content } => {
                     println!("Istoric");
                     for item in content {
                         println!("[{}] {}: {}", item.time, item.sender, item.content);
                     }
-                },
-                _ => { println!("[server]: {:?}", msg)},
+                }
+                _ => {
+                    println!("[server]: {:?}", msg)
+                }
             }
             std::io::stdout().flush().ok();
         }
@@ -79,7 +86,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             continue;
         };
 
-        if let Err(e) = sender.send_message(msg_to_send){
+        if let Err(e) = sender.send_message(msg_to_send) {
             eprintln!("Eroare trimitere mesaj: {}", e);
             break;
         }

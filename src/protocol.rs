@@ -42,7 +42,7 @@ pub enum Message {
         id: u64,
         from: String,
         content: String,
-        time: u64,
+        time: i64,
     },
 
     //Istoricul pe care il vreau de la o persoana respectiva

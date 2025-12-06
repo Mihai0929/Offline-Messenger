@@ -183,7 +183,7 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, mpsc:
                             }
                         };
 
-                        let time: u64 = match row.get(2) {
+                        let time: i64 = match row.get(2) {
                             Ok(t) => t,
                             Err(_) => {
                                 continue;
@@ -219,7 +219,7 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, mpsc:
             } => {
                 if let Some(ref sender) = curr_user {
                     let time = match SystemTime::now().duration_since(UNIX_EPOCH) {
-                        Ok(info) => info.as_secs(),
+                        Ok(info) => info.as_secs() as i64,
                         Err(_) => panic!("SystemTime before UNIX EPOCH!"),
                     };
 

@@ -4,6 +4,7 @@ pub mod protocol;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::sync::mpsc;
+use std::sync::mpsc::TryRecvError;
 use std::thread;
 use std::error::Error;
 
@@ -135,5 +136,13 @@ impl ClientChat{
         },
         self.receiver
         )
+    }
+
+    pub fn try_recv(&self) -> Option<Message> {
+        match self.receiver.try_recv() {
+            Ok(msg) => Some(msg),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => None,
+        }
     }
 }
