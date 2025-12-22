@@ -21,12 +21,26 @@ fn main() -> Result<(), Box<dyn Error>> {
                     time,
                     reply_id,
                 } => {
-                    println!("[#{}] [{}] {}: {}", id, time, from, content);
+                    if let Some(rid) = reply_id {
+                        println!(
+                            "[#{}] (reply to #{}) [{}] {}: {}",
+                            id, rid, time, from, content
+                        );
+                    } else {
+                        println!("[#{}] [{}] {}: {}", id, time, from, content);
+                    }
                 }
                 Message::HistoryData { content } => {
                     println!("Istoric");
                     for item in content {
-                        println!("[{}] {}: {}", item.time, item.sender, item.content);
+                        if let Some(rid) = item.reply_id {
+                            println!(
+                                "[{}] {} (reply to #{}): {}",
+                                item.time, item.sender, rid, item.content
+                            );
+                        } else {
+                            println!("[{}] {}: {}", item.time, item.sender, item.content);
+                        }
                     }
                 }
                 _ => {

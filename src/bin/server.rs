@@ -159,11 +159,14 @@ fn client_handle(
                     }
 
                     //Trimitem mesajele offline la user-ul logged
-                    let mut statement = match conn.prepare("SELECT sender, content, time, reply_id, id FROM messages WHERE delivered = 0 AND receiver = ?1"){
+                    let mut statement = match conn.prepare(
+                        "SELECT sender, content, time, reply_id, id FROM messages
+     WHERE delivered = 0 AND receiver = ?1",
+                    ) {
                         Ok(s) => s,
                         Err(e) => {
                             eprintln!("Eroare la preluarea informatiilor: {}", e);
-                            return ;
+                            return;
                         }
                     };
 
@@ -228,6 +231,7 @@ fn client_handle(
                     println!("Login esuat! parola incorecta");
                 }
             }
+
             Message::Text {
                 to,
                 content,
@@ -239,10 +243,13 @@ fn client_handle(
                         Err(_) => panic!("SystemTime before UNIX EPOCH!"),
                     };
 
-                    let message_id: u64 = match conn.execute(
-                        "INSERT INTO messages (sender, receiver, reply_id, content, time, delivered) VALUES (?1, ?2, ?3, ?4, ?5, 0)",
-                        params![sender, to, reply_id, content, time],
-                    ) {
+                    let res = conn.execute(
+            "INSERT INTO messages (sender, receiver, content, time, delivered, reply_id)
+             VALUES (?1, ?2, ?3, ?4, 0, ?5)",
+            params![sender, to, content, time, reply_id],
+        );
+
+                    let message_id: u64 = match res {
                         Ok(_) => {
                             println!("Mesaj salvat cu succes({} -> {})", sender, to);
                             conn.last_insert_rowid() as u64
@@ -285,11 +292,11 @@ fn client_handle(
                 if let Some(ref conn_user) = curr_user {
                     //Realizez interogare pentru aflarea mesajelor transmise intre                         2 utilizatori
                     let mut statement = match conn.prepare("SELECT id, sender, content, time, delivered, reply_id FROM messages
-                                                                    WHERE (sender = ?1 AND receiver = ?2) OR (sender = ?2 AND receiver = ?1) ORDER BY time ASC")
-                    {
-                        Ok(s) => s,
-                        Err(e) => {eprintln!("Eroare baza de date preluare informatii istoric: {}", e); continue;}
-                    };
+                                                WHERE (sender = ?1 AND receiver = ?2) OR (sender = ?2 AND receiver = ?1) ORDER BY time ASC")
+{
+    Ok(s) => s,
+    Err(e) => {eprintln!("Eroare baza de date preluare informatii istoric: {}", e); continue;}
+};
 
                     let mut rows_iterator = match statement.query(params![conn_user, user]) {
                         Ok(rows) => rows,

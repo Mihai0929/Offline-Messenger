@@ -240,7 +240,7 @@ impl Messenger {
                         sender: from,
                         content,
                         time,
-                        reply_to: None,
+                        reply_to: reply_id,
                     });
                 }
 
@@ -261,7 +261,7 @@ impl Messenger {
                             sender,
                             content,
                             time,
-                            reply_to: None,
+                            reply_to: reply_id,
                         });
                     }
                 }
@@ -371,14 +371,27 @@ impl eframe::App for Messenger {
                         let time_string = format_time(msg.time);
                         let text = format!("[{time_string}] {}: {}", msg.sender, msg.content);
 
-                        let response = ui.label(text);
+                        ui.group(|ui| {
+                            if let Some(rid) = msg.reply_to
+                                && let Some(orig) = self.messages.iter().find(|m| m.id == Some(rid))
+                            {
+                                let mut preview = orig.content.clone();
+                                if preview.len() > 40 {
+                                    preview.truncate(40);
+                                    preview.push_str("...");
+                                }
+                                ui.label(format!("Raspuns lui {}: {}", orig.sender, preview));
+                            }
 
-                        //in caz ca se da click pe mesaj se da reply
-                        if response.clicked()
-                            && let Some(id) = msg.id
-                        {
-                            clicked_id = Some(id);
-                        }
+                            let response = ui.label(text);
+
+                            //in caz ca se da click pe mesaj se da reply
+                            if response.clicked()
+                                && let Some(id) = msg.id
+                            {
+                                clicked_id = Some(id);
+                            }
+                        });
                     }
                 });
 
