@@ -7,6 +7,7 @@ pub struct MessageHistoryInfo {
     pub content: String,
     pub time: i64,
     pub delivered: bool,
+    pub reply_id: Option<u64>,
 }
 
 //Fac un enunm corespunzator protocolului propus
@@ -43,6 +44,7 @@ pub enum Message {
         from: String,
         content: String,
         time: i64,
+        reply_id: Option<u64>,
     },
 
     //Istoricul pe care il vreau de la o persoana respectiva

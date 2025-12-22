@@ -1,8 +1,8 @@
 use project::criptare::{ChannelSecure, RememberSecret};
 use project::protocol::{Message, MessageHistoryInfo};
 use project::{receive_data, send_data};
+use rusqlite::Connection;
 use rusqlite::params;
-use rusqlite::{Connection, Result};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::error::Error;
@@ -11,7 +11,10 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, mpsc::Sender<Message>>>>) {
+fn client_handle(
+    mut stream: TcpStream,
+    clients: Arc<Mutex<HashMap<String, mpsc::Sender<Message>>>>,
+) {
     println!("Client nou conectat!");
 
     //Pentru fiecare client in parte realizez conexiunea la baze de date
@@ -67,8 +70,11 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, mpsc:
 
     //Pregatim thread-ul pentru ascultare
     thread::spawn(move || {
-        while let Ok(msg) = rx.recv(){
-            if let Ok(bytes) = serde_json::to_vec(&msg) && let Ok(crypted) = write_channel.encrypt(&bytes) && send_data(&mut writer_thread, &crypted).is_err(){
+        while let Ok(msg) = rx.recv() {
+            if let Ok(bytes) = serde_json::to_vec(&msg)
+                && let Ok(crypted) = write_channel.encrypt(&bytes)
+                && send_data(&mut writer_thread, &crypted).is_err()
+            {
                 break;
             }
         }
@@ -81,8 +87,10 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, mpsc:
         let encrypted_package = match receive_data(&mut stream) {
             Ok(bytes) => bytes,
             Err(_) => {
-                if let Some(user) = curr_user && let Ok(mut mp) = clients.lock(){
-                        mp.remove(&user);
+                if let Some(user) = curr_user
+                    && let Ok(mut mp) = clients.lock()
+                {
+                    mp.remove(&user);
                 }
                 break;
             }
@@ -146,12 +154,12 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, mpsc:
                     curr_user = Some(username.clone());
 
                     //retinem sender-ul in map
-                    if let Ok(mut map) = clients.lock(){
+                    if let Ok(mut map) = clients.lock() {
                         map.insert(username.clone(), tx.clone());
                     }
 
                     //Trimitem mesajele offline la user-ul logged
-                    let mut statement = match conn.prepare("SELECT sender, content, time, id FROM messages WHERE delivered = 0 AND receiver = ?1"){
+                    let mut statement = match conn.prepare("SELECT sender, content, time, reply_id, id FROM messages WHERE delivered = 0 AND receiver = ?1"){
                         Ok(s) => s,
                         Err(e) => {
                             eprintln!("Eroare la preluarea informatiilor: {}", e);
@@ -189,14 +197,23 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, mpsc:
                                 continue;
                             }
                         };
-                        let curr_id: u64 = match row.get(3) {
+
+                        let reply_id: Option<u64> = row.get(3).unwrap_or_default();
+
+                        let curr_id: u64 = match row.get(4) {
                             Ok(i) => i,
                             Err(_) => {
                                 continue;
                             }
                         };
 
-                        let msg = Message::ToSend { id: curr_id, from: sender, content, time };
+                        let msg = Message::ToSend {
+                            id: curr_id,
+                            from: sender,
+                            content,
+                            time,
+                            reply_id,
+                        };
 
                         tx.send(msg).ok();
                     }
@@ -207,8 +224,7 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, mpsc:
                         params![username],
                     )
                     .ok();
-                }
-                else{
+                } else {
                     println!("Login esuat! parola incorecta");
                 }
             }
@@ -223,28 +239,42 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, mpsc:
                         Err(_) => panic!("SystemTime before UNIX EPOCH!"),
                     };
 
-                    match conn.execute("INSERT INTO messages (sender, receiver, id, content, time, delivered) VALUES (?1, ?2, ?3, ?4, ?5, 0)", params![sender, to, reply_id, content, time]){
-                        Ok(_) => println!("Mesaj salvat cu succes({} -> {})", sender, to),
-                        Err(e) => eprintln!("Eroare la trimiterea mesajului: {}", e),
-                    }
+                    let message_id: u64 = match conn.execute(
+                        "INSERT INTO messages (sender, receiver, reply_id, content, time, delivered) VALUES (?1, ?2, ?3, ?4, ?5, 0)",
+                        params![sender, to, reply_id, content, time],
+                    ) {
+                        Ok(_) => {
+                            println!("Mesaj salvat cu succes({} -> {})", sender, to);
+                            conn.last_insert_rowid() as u64
+                        }
+                        Err(e) => {
+                            eprintln!("Eroare la trimiterea mesajului: {}", e);
+                            continue;
+                        }
+                    };
 
                     let mut delivered = false;
-                    if let Ok(map) = clients.lock(){
+                    if let Ok(map) = clients.lock() {
                         //Verificam daca user-ul este pe canal si ii trimitem mesajul
-                        if let Some(recipient_tx) = map.get(&to){
-                            let msg = Message::ToSend { id: 0, from: sender.clone(), content: content.clone(), time };
-                            if recipient_tx.send(msg).is_ok(){
+                        if let Some(recipient_tx) = map.get(&to) {
+                            let msg = Message::ToSend {
+                                id: message_id,
+                                from: sender.clone(),
+                                content: content.clone(),
+                                time,
+                                reply_id,
+                            };
+                            if recipient_tx.send(msg).is_ok() {
                                 delivered = true;
                             }
                         }
                     }
 
                     //daca mesajul s-a trimis dam update la baza de date
-                    if delivered{
+                    if delivered {
                         conn.execute("UPDATE messages SET delivered = 1 WHERE sender = ?1 and receiver = ?2 and time = ?3", params![sender, to, time]).ok();
                         println!("Mesaj livrat cu succes catre {}", to);
-                    }
-                    else{
+                    } else {
                         println!("Mesaj offline salvat pentru {}", to);
                     }
                 } else {
@@ -254,7 +284,7 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, mpsc:
             Message::HistoryInfo { user } => {
                 if let Some(ref conn_user) = curr_user {
                     //Realizez interogare pentru aflarea mesajelor transmise intre                         2 utilizatori
-                    let mut statement = match conn.prepare("SELECT id, sender, content, time, delivered FROM messages
+                    let mut statement = match conn.prepare("SELECT id, sender, content, time, delivered, reply_id FROM messages
                                                                     WHERE (sender = ?1 AND receiver = ?2) OR (sender = ?2 AND receiver = ?1) ORDER BY time ASC")
                     {
                         Ok(s) => s,
@@ -301,12 +331,14 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, mpsc:
                             }
                         };
 
-                        let delivered_success: i64 = match row.get(4){
+                        let delivered_success: i64 = match row.get(4) {
                             Ok(d) => d,
                             Err(_) => {
                                 continue;
                             }
                         };
+
+                        let reply_id: Option<u64> = row.get(5).unwrap_or_default();
 
                         let package = MessageHistoryInfo {
                             message_id,
@@ -314,12 +346,15 @@ fn client_handle(mut stream: TcpStream, clients: Arc<Mutex<HashMap<String, mpsc:
                             content,
                             time,
                             delivered: delivered_success == 1,
+                            reply_id,
                         };
 
                         history_vector.push(package);
                     }
 
-                    let package = Message::HistoryData { content: history_vector };
+                    let package = Message::HistoryData {
+                        content: history_vector,
+                    };
                     tx.send(package).ok();
 
                     println!("Istoric trimis catre {}", conn_user);
@@ -351,11 +386,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                         messages(sender TEXT NOT NULL,
                                  receiver TEXT NOT NULL,
                                  id INTEGER PRIMARY KEY,
+                                 reply_id INTEGER,
                                  content TEXT NOT NULL,
                                  time INTEGER NOT NULL,
                                  delivered INTEGER DEFAULT 0)",
         (),
     )?;
+
+    conn.execute("ALTER TABLE messages ADD COLUMN reply_id INTEGER", ())
+        .ok();
 
     //Retin intr-un map pentru fiecare utilizator inregistrat user-ul si socket-ul
     let connected_clients = Arc::new(Mutex::new(HashMap::<String, mpsc::Sender<Message>>::new()));

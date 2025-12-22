@@ -1,17 +1,15 @@
+use chrono::{DateTime, Local, Utc};
 use eframe::egui;
 use project::ClientChat;
 use project::protocol::{Message, MessageHistoryInfo};
-use chrono::{DateTime, Local, Utc};
-
 
 const SERVER_ADDRESS: &str = "127.0.0.1:2024";
 
 fn format_time(secs: i64) -> String {
-    if let Some(utc_time) = DateTime::<Utc>::from_timestamp(secs, 0){
+    if let Some(utc_time) = DateTime::<Utc>::from_timestamp(secs, 0) {
         let local_time: DateTime<Local> = utc_time.with_timezone(&Local);
         local_time.format("%d/%m/%Y %H:%M:%S").to_string()
-    }
-    else{
+    } else {
         "Invalid time".to_string()
     }
 }
@@ -24,6 +22,14 @@ pub fn main() -> eframe::Result<()> {
         native_options,
         Box::new(|cc| Ok(Box::new(Messenger::new(cc)))),
     )
+}
+
+struct ChatMessage {
+    id: Option<u64>,
+    sender: String,
+    content: String,
+    time: i64,
+    reply_to: Option<u64>,
 }
 
 struct Messenger {
@@ -39,7 +45,8 @@ struct Messenger {
     // conversatie curenta
     curr_person: String,
     message_input: String,
-    message_history: Vec<String>,
+    messages: Vec<ChatMessage>,
+    reply_to: Option<u64>,
 }
 
 impl Messenger {
@@ -54,10 +61,11 @@ impl Messenger {
 
             curr_person: String::new(),
             message_input: String::new(),
-            message_history: Vec::new(),
+
+            messages: Vec::new(),
+            reply_to: None,
         };
 
-        // încercăm să ne conectăm imediat, fără buton
         this.try_to_connect();
         this
     }
@@ -68,8 +76,13 @@ impl Messenger {
         match ClientChat::connect(SERVER_ADDRESS) {
             Ok(client) => {
                 self.client = Some(client);
-                self.message_history
-                    .push(format!("Conectat la {}", SERVER_ADDRESS));
+                self.messages.push(ChatMessage {
+                    id: None,
+                    sender: "System".to_string(),
+                    content: format!("Conectat la adresa {}", SERVER_ADDRESS),
+                    time: Local::now().timestamp(),
+                    reply_to: None,
+                });
             }
             Err(e) => {
                 self.connect_error = Some(format!("Eroare la conectare: {}", e));
@@ -111,67 +124,99 @@ impl Messenger {
         }
 
         let Some(client) = self.client.as_mut() else {
-            self.message_history
-                .push("Nu esti conectat la server".to_owned());
+            self.messages.push(ChatMessage {
+                id: None,
+                sender: "System".to_string(),
+                content: "Nu esti conectat la server!".to_owned(),
+                time: Local::now().timestamp(),
+                reply_to: None,
+            });
             return;
         };
 
-        self.message_history.clear();
+        self.messages.clear();
+        self.reply_to = None;
 
         let msg = Message::HistoryInfo {
             user: person.to_string(),
         };
 
         if let Err(e) = client.send_message(msg) {
-            self.message_history
-                .push(format!("Eroare cerere istoric: {}", e));
+            self.messages.push(ChatMessage {
+                id: None,
+                sender: "System".to_string(),
+                content: format!("Eroare la preluarea istoricului! {}", e),
+                time: Local::now().timestamp(),
+                reply_to: None,
+            })
         }
     }
 
-    
     fn send_current_message(&mut self) {
-        let person = self.curr_person.trim();
-        let text = self.message_input.trim();
+        let person = self.curr_person.trim().to_string();
+        let text = self.message_input.trim().to_string();
 
         if person.is_empty() || text.is_empty() {
             return;
         }
 
         let Some(client) = self.client.as_mut() else {
-            self.message_history
-                .push("Nu esti conectat la server".to_owned());
+            self.messages.push(ChatMessage {
+                id: None,
+                sender: "System".to_string(),
+                content: "Nu esti conectat la server".to_owned(),
+                time: Local::now().timestamp(),
+                reply_to: None,
+            });
             return;
         };
 
+        let reply_id = self.reply_to;
+
         let msg = Message::Text {
-            to: person.to_string(),
-            content: text.to_string(),
-            reply_id: None,
+            to: person.clone(),
+            content: text.clone(),
+            reply_id,
         };
 
         match client.send_message(msg) {
             Ok(()) => {
                 //formatam timpul
-                let time_secs = chrono::Local::now().timestamp();
-                let time_str = format_time(time_secs);
+                let time_secs = Local::now().timestamp();
 
-                let sender = if self.username.trim().is_empty(){
+                let sender = if self.username.trim().is_empty() {
                     "curr_user".to_string()
-                }
-                else{
+                } else {
                     self.username.clone()
                 };
 
                 //afisam mesajul local
-                self.message_history
-                    .push(format!("[{time_str}] {sender}: {text}"));
+                self.messages.push(ChatMessage {
+                    id: None,
+                    sender,
+                    content: text,
+                    time: time_secs,
+                    reply_to: reply_id,
+                });
+
+                //dupa ce dam reply nu mai tinem flag-ul pentru reply
+                self.reply_to = None;
                 self.message_input.clear();
             }
             Err(e) => {
-                self.message_history
-                    .push(format!("Eroare la trimitere: {}", e));
+                self.messages.push(ChatMessage {
+                    id: None,
+                    sender: "System".to_string(),
+                    content: format!("Eroare la trimitere: {}", e),
+                    time: Local::now().timestamp(),
+                    reply_to: None,
+                });
             }
         }
+    }
+
+    fn reply_message(&mut self, id: u64) {
+        self.reply_to = Some(id);
     }
 
     //preluam toate mesajele de la server
@@ -188,33 +233,48 @@ impl Messenger {
                     from,
                     content,
                     time,
+                    reply_id,
                 } => {
-                    let time_str = format_time(time);
-                    self.message_history
-                        .push(format!("#{id} [{time_str}] {from}: {content}"));
+                    self.messages.push(ChatMessage {
+                        id: Some(id),
+                        sender: from,
+                        content,
+                        time,
+                        reply_to: None,
+                    });
                 }
 
                 // istoricul pentru conversatia curenta
                 Message::HistoryData { content } => {
-                    self.message_history.clear();
+                    self.messages.clear();
                     for MessageHistoryInfo {
                         message_id,
                         sender,
                         content,
                         time,
-                        delivered,
+                        delivered: _,
+                        reply_id,
                     } in content
                     {
-                        let time_str = format_time(time);
-                        let ok = if delivered { "" } else { " (Mesaj nelivrat)" };
-                        self.message_history
-                            .push(format!("#{message_id} [{time_str}] {sender}: {content}{ok}",));
+                        self.messages.push(ChatMessage {
+                            id: Some(message_id),
+                            sender,
+                            content,
+                            time,
+                            reply_to: None,
+                        });
                     }
                 }
 
                 // fallback pentru alte tipuri de mesaje
                 other => {
-                    self.message_history.push(format!("Server: {:?}", other));
+                    self.messages.push(ChatMessage {
+                        id: None,
+                        sender: "Server".to_string(),
+                        content: format!("{:?}", other),
+                        time: Local::now().timestamp(),
+                        reply_to: None,
+                    });
                 }
             }
         }
@@ -256,6 +316,22 @@ impl eframe::App for Messenger {
         });
 
         egui::TopBottomPanel::bottom("input_panel").show(ctx, |ui| {
+            if let Some(id) = self.reply_to
+                && let Some(msg) = self.messages.iter().find(|m| m.id == Some(id))
+            {
+                let mut preview = msg.content.clone();
+                if preview.len() > 40 {
+                    preview.truncate(40);
+                    preview.push_str("...");
+                }
+                ui.horizontal(|ui| {
+                    ui.label(format!("Raspunzi lui {}: {}", msg.sender, preview));
+                    if ui.button("Anuleaza").clicked() {
+                        self.reply_to = None;
+                    }
+                });
+            }
+
             ui.separator();
             ui.horizontal(|ui| {
                 let response = ui.add(
@@ -285,14 +361,30 @@ impl eframe::App for Messenger {
 
             ui.separator();
 
+            let mut clicked_id: Option<u64> = None;
+
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
-                    for line in &self.message_history {
-                        ui.label(line);
+                    for msg in &self.messages {
+                        let time_string = format_time(msg.time);
+                        let text = format!("[{time_string}] {}: {}", msg.sender, msg.content);
+
+                        let response = ui.label(text);
+
+                        //in caz ca se da click pe mesaj se da reply
+                        if response.clicked()
+                            && let Some(id) = msg.id
+                        {
+                            clicked_id = Some(id);
+                        }
                     }
                 });
+
+            if let Some(id) = clicked_id {
+                self.reply_message(id);
+            }
         });
     }
 }

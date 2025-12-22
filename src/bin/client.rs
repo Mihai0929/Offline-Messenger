@@ -19,6 +19,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     from,
                     content,
                     time,
+                    reply_id,
                 } => {
                     println!("[#{}] [{}] {}: {}", id, time, from, content);
                 }
