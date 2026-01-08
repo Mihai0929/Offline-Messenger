@@ -260,6 +260,15 @@ fn client_handle(
                         }
                     };
 
+                    let echo_msg = Message::ToSend {
+                        id: message_id,
+                        from: sender.clone(),
+                        content: content.clone(),
+                        time,
+                        reply_id,
+                    };
+                    tx.send(echo_msg).ok();
+
                     let mut delivered = false;
                     if let Ok(map) = clients.lock() {
                         //Verificam daca user-ul este pe canal si ii trimitem mesajul

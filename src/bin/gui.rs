@@ -174,32 +174,13 @@ impl Messenger {
         let reply_id = self.reply_to;
 
         let msg = Message::Text {
-            to: person.clone(),
-            content: text.clone(),
+            to: person,
+            content: text,
             reply_id,
         };
 
         match client.send_message(msg) {
             Ok(()) => {
-                //formatam timpul
-                let time_secs = Local::now().timestamp();
-
-                let sender = if self.username.trim().is_empty() {
-                    "curr_user".to_string()
-                } else {
-                    self.username.clone()
-                };
-
-                //afisam mesajul local
-                self.messages.push(ChatMessage {
-                    id: None,
-                    sender,
-                    content: text,
-                    time: time_secs,
-                    reply_to: reply_id,
-                });
-
-                //dupa ce dam reply nu mai tinem flag-ul pentru reply
                 self.reply_to = None;
                 self.message_input.clear();
             }
@@ -316,20 +297,26 @@ impl eframe::App for Messenger {
         });
 
         egui::TopBottomPanel::bottom("input_panel").show(ctx, |ui| {
-            if let Some(id) = self.reply_to
-                && let Some(msg) = self.messages.iter().find(|m| m.id == Some(id))
-            {
-                let mut preview = msg.content.clone();
-                if preview.len() > 40 {
-                    preview.truncate(40);
-                    preview.push_str("...");
-                }
-                ui.horizontal(|ui| {
-                    ui.label(format!("Raspunzi lui {}: {}", msg.sender, preview));
-                    if ui.button("Anuleaza").clicked() {
-                        self.reply_to = None;
+            if let Some(id) = self.reply_to {
+                if let Some(msg) = self.messages.iter().find(|m| m.id == Some(id)) {
+                    let mut preview = msg.content.clone();
+                    if preview.len() > 40 {
+                        preview.truncate(40);
+                        preview.push_str("...");
                     }
-                });
+                    ui.horizontal(|ui| {
+                        ui.label(format!("Raspunzi lui {}: {}", msg.sender, preview));
+                        if ui.button("Anuleaza").clicked() {
+                            self.reply_to = None;
+                        }
+                    });
+                } else {
+                    ui.horizontal(|ui| {
+                        if ui.button("Anuleaza").clicked() {
+                            self.reply_to = None;
+                        }
+                    });
+                }
             }
 
             ui.separator();
@@ -372,15 +359,18 @@ impl eframe::App for Messenger {
                         let text = format!("[{time_string}] {}: {}", msg.sender, msg.content);
 
                         ui.group(|ui| {
-                            if let Some(rid) = msg.reply_to
-                                && let Some(orig) = self.messages.iter().find(|m| m.id == Some(rid))
-                            {
-                                let mut preview = orig.content.clone();
-                                if preview.len() > 40 {
-                                    preview.truncate(40);
-                                    preview.push_str("...");
+                            if let Some(rid) = msg.reply_to {
+                                if let Some(orig) = self.messages.iter().find(|m| m.id == Some(rid))
+                                {
+                                    let mut preview = orig.content.clone();
+                                    if preview.len() > 40 {
+                                        preview.truncate(40);
+                                        preview.push_str("...");
+                                    }
+                                    ui.label(format!("Raspuns lui {}: {}", orig.sender, preview));
+                                } else {
+                                    println!("Reply la mesaj anterior");
                                 }
-                                ui.label(format!("Raspuns lui {}: {}", orig.sender, preview));
                             }
 
                             let response = ui.label(text);
