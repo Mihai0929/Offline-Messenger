@@ -11,6 +11,10 @@ use std::error::Error;
 use crate::criptare::{ChannelSecure, RememberSecret};
 use crate::protocol::Message;
 
+pub fn log_error<E: std::fmt::Display>(context: &str, e: E) {
+    eprintln!("[ERROR] [{}]: {}", context, e);
+}
+
 pub fn send_data(stream: &mut TcpStream, data: &[u8]) -> io::Result<()> {
     let len = data.len() as u32;
 
@@ -62,7 +66,7 @@ impl ClientChat{
         let info = RememberSecret::new();
         let client_public_key = info.public_key.as_bytes().to_vec();
         let to_send = Message::ClientKey {
-        public_key: client_public_key,
+            public_key: client_public_key,
         };
         
         let package = serde_json::to_vec(&to_send).expect("Eroare serializare");
@@ -95,12 +99,18 @@ impl ClientChat{
             while let Ok(encrypted) = receive_data(&mut read_stream){
                 let decrypted = match read_channel.decrypt(&encrypted){
                     Ok(data) => data,
-                    Err(_) => continue
+                    Err(e) => {
+                        log_error("Decryption in listener thread", e);
+                        continue;
+                    }
                 };
 
                 let msg = match serde_json::from_slice::<Message>(&decrypted){
                     Ok(msg) => msg,
-                    Err(_) => continue
+                    Err(e) => {
+                         log_error("Deserialization in listener thread", e);
+                         continue;
+                    }
                 };
 
                 if tx.send(msg).is_err(){
