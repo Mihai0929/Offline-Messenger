@@ -1,5 +1,5 @@
-use project::ClientChat;
 use project::protocol::Message;
+use project::{ClientChat, log_error};
 use std::error::Error;
 use std::io::Write;
 use std::thread;
@@ -102,7 +102,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         };
 
         if let Err(e) = sender.send_message(msg_to_send) {
-            eprintln!("Eroare trimitere mesaj: {}", e);
+            log_error("Trimitere mesaj", e);
             break;
         }
     }

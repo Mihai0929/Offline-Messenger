@@ -1,6 +1,6 @@
 use project::criptare::{ChannelSecure, RememberSecret};
 use project::protocol::{Message, MessageHistoryInfo};
-use project::{receive_data, send_data};
+use project::{log_error, receive_data, send_data};
 use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -31,7 +31,7 @@ fn perform_handshake(
 
     let client_public_key = match client_msg {
         Message::ClientKey { public_key } => public_key,
-        _ => return Err("Protocol esuat. Asteptam clientkey".into()),
+        _ => return Err("Protocol esuat: ClientKey expected".into()),
     };
 
     println!("Cheie client primita! Generam cheia comuna");
@@ -102,9 +102,8 @@ fn send_offline_messages(
             reply_id,
         };
 
-        if tx.send(msg).is_err() {
-            println!("Canalul de comunicare este inchis");
-            break;
+        if let Err(e) = tx.send(msg) {
+            log_error("Trimitere mesaj cand e canalul de comunicare inchis", e);
         }
     }
 
@@ -231,7 +230,7 @@ fn client_handle(
     let conn = match Connection::open("info.db") {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Eroare la deschiderea bazei de date: {}", e);
+            log_error("Database Connection", e);
             return;
         }
     };
@@ -240,7 +239,7 @@ fn client_handle(
     let (mut read_channel, mut write_channel) = match perform_handshake(&mut stream) {
         Ok(channels) => channels,
         Err(e) => {
-            eprintln!("Eroare Handshake: {}", e);
+            log_error("Handshake", e);
             return;
         }
     };
@@ -252,7 +251,7 @@ fn client_handle(
     let mut writer_thread = match stream.try_clone() {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Eroare stream clone: {}", e);
+            log_error("Stream clone", e);
             return;
         }
     };
@@ -262,19 +261,19 @@ fn client_handle(
             let bytes = match serde_json::to_vec(&msg) {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("Eroare serializare in thread: {}", e);
+                    log_error("Serializare thread", e);
                     break;
                 }
             };
             let crypted = match write_channel.encrypt(&bytes) {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("Eroare criptare in thread: {}", e);
+                    log_error("Criptare thread", e);
                     break;
                 }
             };
             if let Err(e) = send_data(&mut writer_thread, &crypted) {
-                eprintln!("Eroare trimitere socket: {}", e);
+                log_error("Socket thread send", e);
                 break;
             }
         }
@@ -300,7 +299,7 @@ fn client_handle(
         let decrypted_package = match read_channel.decrypt(&encrypted_package) {
             Ok(bytes) => bytes,
             Err(e) => {
-                eprintln!("Eroare decrypt: {e}");
+                log_error("Decryption", e);
                 continue;
             }
         };
@@ -308,7 +307,7 @@ fn client_handle(
         let msg: Message = match serde_json::from_slice(&decrypted_package) {
             Ok(msg) => msg,
             Err(e) => {
-                eprintln!("JSON invalid: {e}");
+                log_error("Deserializare JSON", e);
                 continue;
             }
         };
@@ -324,14 +323,17 @@ fn client_handle(
                             map.insert(username.clone(), tx.clone());
                         }
                         if let Err(e) = send_offline_messages(&conn, &username, &tx) {
-                            eprintln!("Eroare trimitere mesaje offline: {}", e);
+                            log_error("Offline Messages", e);
                         }
                     }
                     Ok(false) => {
-                        println!("Login esuat! parola incorecta");
+                        log_error(
+                            "Auth Failed",
+                            format!("Incorrect password for {}", username),
+                        );
                     }
                     Err(e) => {
-                        eprintln!("Eroare procesare login: {}", e);
+                        log_error("Login Process", e);
                     }
                 }
                 Ok(())
@@ -345,7 +347,7 @@ fn client_handle(
                 if let Some(ref sender) = curr_user {
                     process_text_message(&conn, &clients, &tx, sender, to, content, reply_id)
                 } else {
-                    println!("Trimiterea mesajelor necesita autentificare!");
+                    log_error("Permisiuni incalcate", "Incercare trimitere mesaj fara login");
                     Ok(())
                 }
             }
@@ -354,18 +356,18 @@ fn client_handle(
                 if let Some(ref conn_user) = curr_user {
                     process_history_request(&conn, &tx, conn_user, user)
                 } else {
-                    println!("Aceasta comanda necesita autentificare!");
+                    log_error("Permisiuni incalcate", "Cererea istoricului fara login");
                     Ok(())
                 }
             }
             _ => {
-                println!("Comanda invalida");
+                log_error("Protocol", "Comanda inexistenta");
                 Ok(())
             }
         };
 
         if let Err(e) = processing_result {
-            eprintln!("Eroare procesare mesaj: {}", e);
+            log_error("Procesare mesaje", e);
         }
     }
 }
@@ -413,7 +415,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
 
             Err(e) => {
-                println!("[server]Eroare la conectarea cu server-ul: {e}");
+                log_error("Eroare conectare cu server-ul", e);
             }
         }
     }

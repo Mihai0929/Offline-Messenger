@@ -94,13 +94,12 @@ impl ClientChat{
 
         let(tx, rx) = mpsc::channel::<Message>();
         
-        //citim mesajul, il decriptam il parsam si il trimitem
         thread::spawn(move || {
             while let Ok(encrypted) = receive_data(&mut read_stream){
                 let decrypted = match read_channel.decrypt(&encrypted){
                     Ok(data) => data,
                     Err(e) => {
-                        log_error("Decryption in listener thread", e);
+                        log_error("Decryption in listener", e);
                         continue;
                     }
                 };
@@ -108,8 +107,8 @@ impl ClientChat{
                 let msg = match serde_json::from_slice::<Message>(&decrypted){
                     Ok(msg) => msg,
                     Err(e) => {
-                         log_error("Deserialization in listener thread", e);
-                         continue;
+                        log_error("Deserialization in listener", e);
+                        continue;
                     }
                 };
 
