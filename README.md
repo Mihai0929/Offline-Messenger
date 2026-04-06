@@ -29,3 +29,6 @@ User B boots up their client and connects to the server.
 The server automatically pushes the pending messages to User B, decrypting them securely.
 
 User B selects a specific message ID from the history and sends a targeted reply back to User A.
+
+<img width="1919" height="1033" alt="image" src="https://github.com/user-attachments/assets/42137811-8bef-4d7a-b1d2-d6670003f097" />
+
